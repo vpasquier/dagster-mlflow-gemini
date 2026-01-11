@@ -1,0 +1,33 @@
+[project]
+name = "dagster_tutorial"
+requires-python = ">=3.9,<3.14"
+version = "0.1.0"
+dependencies = [
+    "dagster==1.11.4",
+    "dagster-evidence>=0.1.6",
+    "dagster-gemini>=0.0.3",
+    "dagster-mlflow>=0.27.4",
+    "db-dtypes>=1.5.0",
+    "google-cloud-bigquery>=3.40.0",
+    "google-cloud-storage>=2.10.0",
+    "matplotlib>=3.9.4",
+    "mlflow>=3.1.4",
+    "pandas>=2.3.1",
+    "pyarrow>=14.0.0",
+    "scikit-learn>=1.6.1",
+    "seaborn>=0.13.2",
+    "xgboost>=2.1.4",
+]
+
+[dependency-groups]
+dev = ["dagster-webserver", "dagster-dg-cli", "debugpy>=1.8.19"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "dagster_tutorial"
