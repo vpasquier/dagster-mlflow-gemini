@@ -103,15 +103,9 @@ def afib_features(context, afib_raw_data: pd.DataFrame) -> Output[dict]:
 - `activity_std_5min`: 5-minute rolling std of activity (variability indicator)
 - `activity_max_5min`: 5-minute rolling max of activity (peak detection)
 
-### Data Preprocessing
-- ✅ Rolling window features calculated (5-minute windows)
-- ✅ Missing values removed
-- ✅ Features standardized using StandardScaler
-- ✅ Stratified train/test split (80/20) to maintain class balance
-
 ### Quality Checks
-- **Class Balance**: {"⚠️ Imbalanced dataset" if afib_pct < 20 else "✅ Balanced dataset"}
-- **Split Quality**: {"✅ Stratification successful" if abs(train_afib_pct - test_afib_pct) < 5 else "⚠️ Check stratification"}
+- **Class Balance**: {"Imbalanced dataset" if afib_pct < 20 else "Balanced dataset"}
+- **Split Quality**: {"Stratification successful" if abs(train_afib_pct - test_afib_pct) < 5 else "Check stratification"}
 """
     
     return Output(

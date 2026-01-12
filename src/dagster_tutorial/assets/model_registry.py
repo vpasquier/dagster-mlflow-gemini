@@ -1,115 +1,43 @@
 from dagster import asset, Output, MetadataValue as MV, AssetExecutionContext, AssetKey
 import pandas as pd
 import mlflow
-import mlflow.xgboost
 import os
-from dagster_mlflow import mlflow_tracking
 from dagster_tutorial.assets.model_visualization import afib_model_visualization
 from dagster_tutorial.assets.training_model import HYPERPARAM_CONFIGS
-from dagster_tutorial.resources.resources import GCSResource
 import io
 
 
 @asset(
-    deps=[afib_model_visualization],
     compute_kind="mlflow",
     required_resource_keys={"mlflow", "gcs"}
 )
 def register_best_model_to_mlflow(
     context: AssetExecutionContext,
+    afib_model_visualization: dict,
 ) -> Output[dict]:
     """
-    Find the best model across all hyperparameter configurations and register it to MLflow.
-    Uses accuracy as the primary metric and properly references the GCS dataset location.
-    This is a non-partitioned asset that runs after all partitioned training is complete.
-    
-    Uses the official dagster-mlflow integration for proper MLflow tracking.
+    Register the best model to MLflow.
+    Uses comparison data and best model selection from the afib_model_visualization asset.
     """
-    context.log.info("Collecting all model results to find best model...")
-    
-    # The mlflow resource automatically handles tracking URI and experiment setup
+    context.log.info("Received model comparison data from visualization asset...")
     registry_model_name = "afib_xgboost_classifier"
     
-    # Collect all metrics from all partitions
-    comparison_data = []
-    model_paths = {}
+    # Extract the comparison DataFrame and best model info from visualization asset
+    df = afib_model_visualization["comparison_df"]
+    best_partition = afib_model_visualization["best_partition"]
     
-    for pk in HYPERPARAM_CONFIGS.keys():
-        # Get the training asset materializations to fetch the model
-        training_asset_key = AssetKey(["afib_model_training"])
-        records = context.instance.fetch_materializations(
-            training_asset_key,
-            limit=10
-        )
-        
-        partition_materialization = None
-        if records.records:
-            for record in records.records:
-                if record.event_log_entry.dagster_event.partition == pk:
-                    partition_materialization = record.asset_materialization
-                    break
-        
-        if partition_materialization:
-            metadata = partition_materialization.metadata
-            
-            # Extract metrics
-            roc_auc_meta = metadata.get("roc_auc")
-            pr_auc_meta = metadata.get("pr_auc")
-            accuracy_meta = metadata.get("accuracy")
-            
-            partition_roc_auc = roc_auc_meta.value if roc_auc_meta else None
-            partition_pr_auc = pr_auc_meta.value if pr_auc_meta else None
-            partition_accuracy = accuracy_meta.value if accuracy_meta else None
-            
-            # Handle NaN values
-            if partition_roc_auc is not None and (partition_roc_auc != partition_roc_auc):
-                partition_roc_auc = None
-            if partition_pr_auc is not None and (partition_pr_auc != partition_pr_auc):
-                partition_pr_auc = None
-            
-            hp = HYPERPARAM_CONFIGS[pk]
-            
-            comparison_data.append({
-                "partition": pk,
-                "max_depth": hp["max_depth"],
-                "learning_rate": hp["learning_rate"],
-                "roc_auc": partition_roc_auc,
-                "pr_auc": partition_pr_auc,
-                "accuracy": partition_accuracy,
-            })
-            
-            # Store model path
-            model_paths[pk] = f"/tmp/dagster_models/model_{pk}.pkl"
-    
-    if not comparison_data:
-        context.log.error("No model results found! Cannot register to MLflow.")
+    if df.empty or best_partition is None:
+        context.log.error("No valid model results found! Cannot register to MLflow.")
         return Output(
             value={"status": "failed", "reason": "No model results available"},
             metadata={"status": MV.text("No models to register")}
         )
     
-    df = pd.DataFrame(comparison_data)
+    # Get the best model configuration from the DataFrame
+    best_config = df[df["partition"] == best_partition].iloc[0]
     
-    # Find best model - prioritize accuracy as primary metric
-    # Filter out models with invalid metrics
-    df_valid = df[df["accuracy"].notna()].copy()
-    
-    if df_valid.empty:
-        context.log.error("No valid models found (all have NaN accuracy)!")
-        return Output(
-            value={"status": "failed", "reason": "All models have invalid metrics"},
-            metadata={"status": MV.text("No valid models")}
-        )
-    
-    # Sort by accuracy (primary), then by PR-AUC (secondary for imbalanced data)
-    df_sorted = df_valid.sort_values(
-        by=["accuracy", "pr_auc"],
-        ascending=[False, False],
-        na_position='last'
-    )
-    
-    best_config = df_sorted.iloc[0]
-    best_partition = best_config["partition"]
+    # Build model path for the best model
+    model_paths = {pk: f"/tmp/dagster_models/model_{pk}.pkl" for pk in HYPERPARAM_CONFIGS.keys()}
     best_model_path = model_paths.get(best_partition)
     
     context.log.info(f"Best model found: {best_partition}")
@@ -214,13 +142,13 @@ def register_best_model_to_mlflow(
         mlflow.log_input(dataset, context="training")
         dataset_logged = True
         
-        context.log.info(f"✅ Dataset properly logged to MLflow with {len(actual_dataset)} rows and full schema")
+        context.log.info(f"Dataset properly logged to MLflow with {len(actual_dataset)} rows and full schema")
         context.log.info(f"   Dataset name: afib_training_data")
         context.log.info(f"   Dataset source: {gcs_dataset_path}")
         context.log.info(f"   Target column: avg_afib_prob")
         
     except Exception as e:
-        context.log.error(f"❌ Failed to load/log dataset from GCS: {e}")
+        context.log.error(f"Failed to load/log dataset from GCS: {e}")
         context.log.error(f"   Error type: {type(e).__name__}")
         import traceback
         context.log.error(f"   Traceback: {traceback.format_exc()}")
@@ -236,9 +164,9 @@ def register_best_model_to_mlflow(
             )
             mlflow.log_input(dataset, context="training")
             dataset_logged = True
-            context.log.info("⚠️  Logged URI-only dataset reference as fallback")
+            context.log.info("Logged URI-only dataset reference as fallback")
         except Exception as e2:
-            context.log.error(f"❌ Fallback also failed: {e2}")
+            context.log.error(f"Fallback also failed: {e2}")
             dataset_logged = False
     
     if dataset_logged:
@@ -347,7 +275,7 @@ See the training run for full dataset details and lineage.
                 description=dataset_description
             )
             
-            context.log.info(f"✅ Dataset metadata added to model version {model_version}")
+            context.log.info(f"Dataset metadata added to model version {model_version}")
         else:
             context.log.warning("Could not find latest model version to add dataset metadata")
             
@@ -432,11 +360,11 @@ Dataset Schema:
 **Dataset Reference:**
 - Location: `{gcs_dataset_path}`
 - Bucket: `{gcs.bucket_name}`
-- Logged as MLflow Dataset: ✅
+- Logged as MLflow Dataset: Yes
 
 **All Models Comparison:**
 
-{df_sorted[['partition', 'accuracy', 'pr_auc', 'roc_auc', 'max_depth', 'learning_rate']].to_markdown(index=False)}
+{df[['partition', 'accuracy', 'pr_auc', 'roc_auc', 'max_depth', 'learning_rate']].to_markdown(index=False)}
 """
     
     return Output(

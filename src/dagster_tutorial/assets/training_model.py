@@ -4,12 +4,8 @@ from sklearn.metrics import classification_report, roc_auc_score, average_precis
 import matplotlib.pyplot as plt
 import base64
 from io import BytesIO
-import pandas as pd
-import numpy as np
 import pickle
 import os
-import mlflow
-from dagster_mlflow import mlflow_tracking
 
 # Define hyperparameter configurations
 HYPERPARAM_CONFIGS = {
@@ -71,8 +67,6 @@ def afib_model_training(
     # Evaluate
     y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
-    
-    # Calculate accuracy
     accuracy = accuracy_score(y_test, y_pred)
     
     # Check if we can compute ROC AUC (need at least 2 classes)
@@ -105,14 +99,12 @@ def afib_model_training(
     mlf.log_param("n_features", X_train.shape[1])
     mlf.log_param("afib_cases_train", int(n_positive))
     mlf.log_param("no_afib_cases_train", int(n_negative))
-    
-    # Log metrics
     mlf.log_metric("accuracy", accuracy)
     if not (isinstance(roc_auc, float) and roc_auc != roc_auc):  # Check for NaN
         mlf.log_metric("roc_auc", roc_auc)
         mlf.log_metric("pr_auc", pr_auc)
     
-    # Set descriptive run name (after metrics are available)
+    # Log run
     run_name = f"train_{partition_key}_acc{accuracy:.3f}"
     mlf.set_tag("mlflow.runName", run_name)
     context.log.info(f"MLflow run name set to: {run_name}")
@@ -132,21 +124,15 @@ def afib_model_training(
     mlf.set_tag("dagster_partition", partition_key)
     mlf.set_tag("dagster_run_id", context.run_id)
     
-    context.log.info("✅ Metrics logged to MLflow")
-    
     # Evaluate different thresholds
     thresholds_to_test = [0.1, 0.2, 0.3, 0.4, 0.5]
     threshold_results = []
-    
     for threshold in thresholds_to_test:
         y_pred_thresh = (y_proba >= threshold).astype(int)
-        
-        # Calculate metrics for this threshold
         thresh_accuracy = accuracy_score(y_test, y_pred_thresh)
         thresh_precision = precision_score(y_test, y_pred_thresh, zero_division=0)
         thresh_recall = recall_score(y_test, y_pred_thresh, zero_division=0)
         thresh_f1 = f1_score(y_test, y_pred_thresh, zero_division=0)
-        
         threshold_results.append({
             'threshold': threshold,
             'accuracy': thresh_accuracy,
@@ -159,60 +145,9 @@ def afib_model_training(
     best_threshold_result = max(threshold_results, key=lambda x: x['f1'])
     best_threshold = best_threshold_result['threshold']
     
-    context.log.info("="*60)
-    context.log.info(f"MODEL EVALUATION - {partition_key}")
-    context.log.info("="*60)
-    context.log.info(f"Hyperparameters: max_depth={hyperparams['max_depth']}, learning_rate={hyperparams['learning_rate']}")
-    context.log.info(f"Training set size: {len(X_train)}, Test set size: {len(X_test)}")
-    context.log.info(f"Test set class distribution - AFib: {sum(y_test)}, No AFib: {len(y_test) - sum(y_test)}")
-    context.log.info("-"*60)
-    context.log.info(f"ACCURACY (default threshold=0.5): {accuracy:.4f} ({accuracy*100:.2f}%)")
-    if not (isinstance(roc_auc, float) and roc_auc != roc_auc):  # Check for NaN
-        context.log.info(f"ROC-AUC:  {roc_auc:.4f}")
-        context.log.info(f"PR-AUC:   {pr_auc:.4f} ⭐ (Better for imbalanced data)")
-    else:
-        context.log.info("ROC-AUC:  N/A (single class in test set)")
-        context.log.info("PR-AUC:   N/A (single class in test set)")
-    context.log.info("-"*60)
-    context.log.info("DEFAULT THRESHOLD (0.5) PERFORMANCE:")
-    
-    # Log class-specific metrics
-    for class_label in ['0', '1']:
-        if class_label in report:
-            metrics = report[class_label]
-            class_name = "No AFib" if class_label == '0' else "AFib ❤️"
-            context.log.info(f"{class_name:12} - Precision: {metrics['precision']:.4f}, Recall: {metrics['recall']:.4f}, F1: {metrics['f1-score']:.4f}, Support: {int(metrics['support'])}")
-    
-    context.log.info("-"*60)
-    context.log.info("THRESHOLD TUNING RESULTS:")
-    context.log.info(f"{'Threshold':>10} | {'Accuracy':>10} | {'Precision':>10} | {'Recall':>10} | {'F1-Score':>10}")
-    context.log.info("-"*60)
-    for result in threshold_results:
-        marker = " ⭐ BEST" if result['threshold'] == best_threshold else ""
-        context.log.info(
-            f"{result['threshold']:10.1f} | "
-            f"{result['accuracy']:10.4f} | "
-            f"{result['precision']:10.4f} | "
-            f"{result['recall']:10.4f} | "
-            f"{result['f1']:10.4f}{marker}"
-        )
-    
-    context.log.info("-"*60)
-    context.log.info(f"💡 RECOMMENDED THRESHOLD: {best_threshold}")
-    context.log.info(f"   This threshold maximizes F1-score (balance of precision and recall)")
-    context.log.info(f"   AFib Recall: {best_threshold_result['recall']:.1%} | Precision: {best_threshold_result['precision']:.1%}")
-    context.log.info("-"*60)
-    
-    # Get feature importance as a dictionary
+    # Feature Importance
     feature_names = afib_features.get("features", [f"f{i}" for i in range(X_train.shape[1])])
     feature_importance = dict(zip(feature_names, model.feature_importances_))
-    
-    # Log feature importance
-    context.log.info("FEATURE IMPORTANCE (sorted by importance):")
-    sorted_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)
-    for feat_name, importance in sorted_features:
-        context.log.info(f"  {feat_name:25} {importance:.4f}")
-    context.log.info("="*60)
     
     # Save model to temporary location for MLflow registration
     model_dir = "/tmp/dagster_models"

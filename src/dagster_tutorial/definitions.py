@@ -10,7 +10,6 @@ from dagster_tutorial.assets.feature_engineering import afib_features
 from dagster_tutorial.assets.training_model import (
     afib_model_training,
     HYPERPARAM_CONFIGS,
-    hyperparams_partitions,
 )
 from dagster_tutorial.assets.model_visualization import afib_model_visualization
 from dagster_tutorial.assets.gemini_analysis import afib_gemini_analysis
@@ -27,10 +26,29 @@ all_assets = [
     register_best_model_to_mlflow,
 ]
 
-train_all_models_job = define_asset_job(
-    name="train_all_models_parallel",
-    selection=AssetSelection.all(),
-    description="Full pipeline: load data, train models in parallel, compare results",
+# Job 1: Data preparation (non-partitioned assets)
+prepare_data_job = define_asset_job(
+    name="prepare_data",
+    selection=AssetSelection.assets(afib_raw_data, afib_features),
+    description="Load and prepare data for model training",
+)
+
+# Job 2: Model training (partitioned asset - use backfill in UI for parallel execution)
+train_models_job = define_asset_job(
+    name="train_models",
+    selection=AssetSelection.assets(afib_model_training),
+    description="Train models with different hyperparameters (run as backfill for all partitions)",
+)
+
+# Job 3: Model evaluation and registration (non-partitioned downstream assets)
+evaluate_models_job = define_asset_job(
+    name="evaluate_models",
+    selection=AssetSelection.assets(
+        afib_model_visualization,
+        afib_gemini_analysis,
+        register_best_model_to_mlflow
+    ),
+    description="Compare models, analyze with Gemini, and register best model to MLflow",
 )
 
 from dagster_mlflow import mlflow_tracking
@@ -50,13 +68,54 @@ resources_dict = {
 
 defs = Definitions(
     assets=all_assets,
-    jobs=[train_all_models_job],
+    jobs=[prepare_data_job, train_models_job, evaluate_models_job],
     resources=resources_dict,
 )
 
 if __name__ == "__main__":
-    print("Training models with different hyperparameters...\n")
+    """
+    This demonstrates the proper workflow for the partitioned pipeline:
+    
+    Step 1: Prepare data (runs once)
+    Step 2: Train models (runs 3 times in parallel - one per partition)
+    Step 3: Evaluate models (runs once after all training completes)
+    
+    For production, use the Dagster UI to:
+    1. Run the 'prepare_data' job
+    2. Launch a BACKFILL for 'train_models' job (materializes all partitions in parallel)
+    3. Run the 'evaluate_models' job
+    """
+    print("=" * 70)
+    print("AFib Detection Pipeline - Full Workflow")
+    print("=" * 70)
+    
+    # Step 1: Prepare data
+    print("\n[1/3] Preparing data (non-partitioned)...")
+    materialize(
+        assets=[afib_raw_data, afib_features],
+        resources=resources_dict
+    )
+    print("✓ Data preparation complete\n")
+    
+    # Step 2: Train models with different hyperparameters (partitioned)
+    print("[2/3] Training models with different hyperparameters (partitioned)...")
     for partition_key in HYPERPARAM_CONFIGS.keys():
-        print(f"Training partition: {partition_key}")
-        materialize(assets=all_assets, resources=resources_dict, partition_key=partition_key)
-    print("\nAll models trained successfully!")
+        print(f"  → Training partition: {partition_key}")
+        materialize(
+            assets=[afib_model_training],
+            resources=resources_dict,
+            partition_key=partition_key
+        )
+    print("✓ All model training complete\n")
+    
+    # Step 3: Evaluate and register best model (non-partitioned)
+    print("[3/3] Evaluating models and registering best model (non-partitioned)...")
+    materialize(
+        assets=[afib_model_visualization, afib_gemini_analysis, register_best_model_to_mlflow],
+        resources=resources_dict
+    )
+    print("✓ Model evaluation and registration complete\n")
+    
+    print("=" * 70)
+    print("Pipeline execution complete!")
+    print("=" * 70)

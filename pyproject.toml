@@ -3,7 +3,7 @@ name = "dagster_tutorial"
 requires-python = ">=3.9,<3.14"
 version = "0.1.0"
 dependencies = [
-    "dagster==1.11.4",
+    "dagster==1.12.0",
     "dagster-evidence>=0.1.6",
     "dagster-gemini>=0.0.3",
     "dagster-mlflow>=0.27.4",

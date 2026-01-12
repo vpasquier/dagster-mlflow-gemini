@@ -1,13 +1,14 @@
-from dagster import asset, Output, MetadataValue as MV, AssetExecutionContext, AssetKey
-import matplotlib.pyplot as plt
-import seaborn as sns
 import base64
 from io import BytesIO
+
+from dagster import AssetExecutionContext, AssetKey, MetadataValue as MV, Output, asset
+import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
+
 from dagster_tutorial.assets.training_model import (
-    afib_model_training,
-    hyperparams_partitions,
     HYPERPARAM_CONFIGS,
+    afib_model_training,
 )
 
 
@@ -15,8 +16,11 @@ from dagster_tutorial.assets.training_model import (
     deps=[afib_model_training],
     compute_kind="matplotlib"
 )
-def afib_model_visualization(context: AssetExecutionContext) -> Output[None]:
-    """Generate comprehensive visualizations comparing all trained models across hyperparameters."""
+def afib_model_visualization(context: AssetExecutionContext) -> Output[dict]:
+    """
+    Generate comprehensive visualizations comparing all trained models across hyperparameters.
+    Returns a dict with the comparison DataFrame and best model information for downstream consumption.
+    """
     context.log.info("Generating consolidated visualization for all trained models...")
     
     # Collect metrics from all partitions
@@ -66,7 +70,7 @@ def afib_model_visualization(context: AssetExecutionContext) -> Output[None]:
     if not comparison_data:
         context.log.warning("No model data found yet. Run afib_model_training first.")
         return Output(
-            value=None,
+            value={"comparison_df": pd.DataFrame(), "best_partition": None},
             metadata={"status": MV.text("No model data available")}
         )
     
@@ -126,7 +130,7 @@ def afib_model_visualization(context: AssetExecutionContext) -> Output[None]:
         bars = ax3.bar(df_valid_pr["partition"], df_valid_pr["pr_auc"], color=colors)
         ax3.set_xlabel("Hyperparameter Configuration")
         ax3.set_ylabel("PR-AUC Score")
-        ax3.set_title("PR-AUC Comparison ⭐ (Best for Imbalanced Data)")
+        ax3.set_title("PR-AUC Comparison (Best for Imbalanced Data)")
         ax3.set_ylim(0, 1)
         ax3.tick_params(axis='x', rotation=45)
         
@@ -183,8 +187,22 @@ def afib_model_visualization(context: AssetExecutionContext) -> Output[None]:
     # Create summary table
     summary_table = df.to_markdown(index=False, floatfmt=".4f")
     
-    # Find best model
-    best_model = df.loc[df["accuracy"].idxmax()] if not df["accuracy"].isna().all() else None
+    # Find best model using robust filtering and sorting
+    # Filter out models with invalid metrics
+    df_valid = df[df["accuracy"].notna()].copy()
+    
+    if not df_valid.empty:
+        # Sort by accuracy (primary), then by PR-AUC (secondary for imbalanced data)
+        df_sorted = df_valid.sort_values(
+            by=["accuracy", "pr_auc"],
+            ascending=[False, False],
+            na_position='last'
+        )
+        best_model = df_sorted.iloc[0]
+        best_partition = best_model["partition"]
+    else:
+        best_model = None
+        best_partition = None
     
     summary_md = f"""
 ## Model Training Results Summary
@@ -216,9 +234,14 @@ def afib_model_visualization(context: AssetExecutionContext) -> Output[None]:
         if pd.notna(best_model["accuracy"]):
             metadata_dict["best_accuracy"] = float(best_model["accuracy"])
     
-    context.log.info(f"✅ Generated comprehensive visualization comparing {len(comparison_data)} models")
+    context.log.info(f"Generated comprehensive visualization comparing {len(comparison_data)} models")
+    if best_partition:
+        context.log.info(f"   Best model identified: {best_partition}")
     
     return Output(
-        value=None,
+        value={
+            "comparison_df": df,
+            "best_partition": best_partition
+        },
         metadata=metadata_dict,
     )

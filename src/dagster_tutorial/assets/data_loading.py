@@ -1,4 +1,4 @@
-from dagster import asset, Output, MetadataValue as MV, EnvVar
+from dagster import asset, Output, MetadataValue as MV
 import pandas as pd
 import io
 import os
@@ -8,7 +8,6 @@ from dagster_tutorial.resources.resources import BigQueryResource, GCSResource
 def afib_raw_data(context, bigquery: BigQueryResource, gcs: GCSResource) -> Output[pd.DataFrame]:
     """
     Loads joined AFib-related data from GCS parquet file if available, otherwise fetches from BigQuery.
-    Returns a Pandas DataFrame with heart rate, activity, bracelet vitals, and AFib probability data.
     """
     blob_name = os.getenv("GCS_DATA_PATH", "dagster-ml/afib_raw_data.parquet")
     
@@ -26,11 +25,9 @@ def afib_raw_data(context, bigquery: BigQueryResource, gcs: GCSResource) -> Outp
     else:
         # Fetch from BigQuery and save to GCS
         context.log.info("Parquet file not found in GCS, fetching from BigQuery...")
-        
-        # Get BigQuery table names from environment
         afib_table = os.getenv("BIGQUERY_AFIB_TABLE", "")
         activity_table = os.getenv("BIGQUERY_ACTIVITY_TABLE", "")
-        
+
         query = f"""
         WITH
         -- AFib probability data (labels)
@@ -42,13 +39,6 @@ def afib_raw_data(context, bigquery: BigQueryResource, gcs: GCSResource) -> Outp
             confidence AS afib_confidence
           FROM
             `{afib_table}`
-          -- WHERE
-          --   -- Include ONLY the 3 dominant accounts (likely the AFib patients)
-          --   ext_account IN (
-          --     '0717ea33-9fba-4f37-b755-3d3ea79eb3b1',  -- 52,733 samples
-          --     '30f1294a-8f54-4baf-a94f-9cbe19d9520f',  -- 217,770 samples
-          --     '36935936-4c00-42b7-8b88-358a9e5ff3e5'   -- 198,510 samples
-          --   )
         ),
 
         -- Activity data (1-min averages)
@@ -60,13 +50,6 @@ def afib_raw_data(context, bigquery: BigQueryResource, gcs: GCSResource) -> Outp
             confidence AS activity_confidence
           FROM
             `{activity_table}`
-          -- WHERE
-          --   -- Include ONLY the 3 dominant accounts (likely the AFib patients)
-          --   ext_account IN (
-          --     '0717ea33-9fba-4f37-b755-3d3ea79eb3b1',
-          --     '30f1294a-8f54-4baf-a94f-9cbe19d9520f',
-          --     '36935936-4c00-42b7-8b88-358a9e5ff3e5'
-          --   )
         )
 
         -- Join the two tables
